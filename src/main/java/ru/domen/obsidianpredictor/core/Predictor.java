@@ -28,8 +28,12 @@ public final class Predictor {
         void fillLayer(int y, byte[] out);
     }
 
-    /** Marker positions as flat (x, y, z) triples, region-local, in output order. */
-    public record Result(int[] lava, int[] blastResistant) {
+    /**
+     * Positions as flat (x, y, z) triples, region-local. {@code lava} and {@code blastResistant}
+     * are the waypoints in output order (one per blast-resistant group); {@code blastResistantBlocks}
+     * lists every blast-resistant block, for highlighting whole groups.
+     */
+    public record Result(int[] lava, int[] blastResistant, int[] blastResistantBlocks) {
         public int lavaCount() {
             return lava.length / 3;
         }
@@ -438,7 +442,14 @@ public final class Predictor {
             focusedFloodedLava = focusedFloodedLavaBelow;
             focusedFloodedLavaBelow = focusedSwap;
         }
-        return new Result(lavaMarkers.toIntArray(), blastResistantMarkerList());
+        int[] allBlastResistant = new int[blastResistantOrder.size() * 3];
+        for (int i = 0; i < blastResistantOrder.size(); i++) {
+            long key = blastResistantOrder.getLong(i);
+            allBlastResistant[3 * i] = unpackX(key);
+            allBlastResistant[3 * i + 1] = unpackY(key);
+            allBlastResistant[3 * i + 2] = unpackZ(key);
+        }
+        return new Result(lavaMarkers.toIntArray(), blastResistantMarkerList(), allBlastResistant);
     }
 
     /** {@code waypoint:...} line in the format of {@code format_waypoint} in Python. */

@@ -18,6 +18,7 @@ public final class Snapshot implements Predictor.LayerSource {
     private final byte[] uniform;
     private final boolean[] chunkPresent;
     private int presentChunks;
+    private long nibbleBytes;
 
     /** Inclusive block bounds. */
     public Snapshot(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
@@ -109,6 +110,7 @@ public final class Snapshot implements Predictor.LayerSource {
         boolean changed = nibbles == null
                 ? data[i] != null || uniform[i] != uniformCode
                 : !Arrays.equals(data[i], nibbles);
+        nibbleBytes += (nibbles == null ? 0 : nibbles.length) - (data[i] == null ? 0 : data[i].length);
         data[i] = nibbles;
         uniform[i] = (byte) uniformCode;
         return changed;
@@ -140,6 +142,7 @@ public final class Snapshot implements Predictor.LayerSource {
                 return;
             }
             nibbles = new byte[2048];
+            nibbleBytes += nibbles.length;
             int u = uniform[i] & 15;
             Arrays.fill(nibbles, (byte) (u | (u << 4)));
             data[i] = nibbles;
@@ -201,12 +204,22 @@ public final class Snapshot implements Predictor.LayerSource {
         }
     }
 
-    /** Approximate heap used by section data, for status display. */
+    /** Approximate heap used by the snapshot. O(1). */
     public long memoryBytes() {
-        long bytes = (long) data.length * 9 + chunkPresent.length;
-        for (byte[] d : data) {
-            if (d != null) bytes += d.length + 16;
-        }
-        return bytes;
+        long sections = data.length;
+        return sections * 9 + chunkPresent.length + nibbleBytes + nibbleBytes / 2048 * 16;
+    }
+
+    /**
+     * Heap a prediction over an area needs besides the non-uniform sections: section tables plus
+     * the predictor's per-column arrays (about 16 bytes per x/z column).
+     */
+    public static long fixedBytes(int sizeX, int sizeZ, long sections) {
+        return sections * 9 + (long) sizeX * sizeZ * 16;
+    }
+
+    /** Worst case for section data: every section non-uniform. */
+    public static long worstCaseSectionBytes(long sections) {
+        return sections * (2048 + 16);
     }
 }

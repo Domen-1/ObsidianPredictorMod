@@ -57,6 +57,8 @@ public final class PredictionJob {
     private long lastChangeMs;
     private long dirtySinceMs;
     private long maxStaleMs = 10_000;
+    /** Snapshot size at which the job fails instead of risking running out of memory. */
+    private volatile long memoryBudgetBytes = Long.MAX_VALUE;
     private Predictor.Result result;
     private int revision;
     private String message = "";
@@ -166,6 +168,13 @@ public final class PredictionJob {
             changed |= snapshot.putSection(chunkX, chunkZ, snapshot.sectionMinY() + i, encoded.nibbles(), encoded.uniformCode());
         }
         boolean added = snapshot.markChunkPresent(chunkX, chunkZ);
+        if (snapshot.memoryBytes() > memoryBudgetBytes) {
+            cancelled = true;
+            long used = MemoryBudget.mb(snapshot.memoryBytes());
+            mainThread.execute(() -> fail("not enough memory: the area's blocks already take " + used
+                    + " MB, more than this job may use. Give Minecraft more memory (-Xmx) or split the area."));
+            return;
+        }
         boolean anyChange = changed || added;
         mainThread.execute(() -> onChunkStored(chunkX, chunkZ, anyChange));
     }
@@ -198,6 +207,10 @@ public final class PredictionJob {
         }
         dirty = true;
         lastChangeMs = now;
+    }
+
+    public void setMemoryBudget(long bytes) {
+        this.memoryBudgetBytes = bytes;
     }
 
     /**

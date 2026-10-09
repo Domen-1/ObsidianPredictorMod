@@ -1,10 +1,13 @@
 package ru.domen.obsidianpredictor.client;
 
+import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 import ru.domen.obsidianpredictor.network.Payloads;
 import ru.domen.obsidianpredictor.world.PredictionJob;
@@ -35,6 +38,9 @@ public final class HudOverlay {
             PredictionJob job = local.job();
             lines.add(new Line("Obsidian Predictor (local)", WHITE));
             status(lines, job.phase(), job.capturedChunks(), job.totalChunks(), job.predictionPermille(), job.isPredicting(), job.message());
+            if (job.phase() == PredictionJob.Phase.CAPTURING) {
+                nearestMissingChunk(lines, mc, job.missingChunks());
+            }
         } else if (remote != null) {
             lines.add(new Line("Obsidian Predictor: '" + remote.name() + "' on server", WHITE));
             status(lines, PredictionJob.Phase.byId(remote.phase()), remote.capturedChunks(), remote.totalChunks(),
@@ -45,7 +51,10 @@ public final class HudOverlay {
 
         ClientSession.Markers markers = ClientSession.markers();
         if (markers != null && (!markers.lava().isEmpty() || !markers.blastResistant().isEmpty())) {
-            lines.add(new Line("Lava to cover: " + markers.lava().size() + "   Blast resistant: " + markers.blastResistant().size(), WHITE));
+            int groups = markers.blastResistant().size();
+            int blocks = markers.blastGroups().blockCount();
+            lines.add(new Line("Lava to cover: " + markers.lava().size() + "   Blast resistant: " + groups
+                    + (groups == 1 ? " group" : " groups") + (blocks > 0 ? " (" + blocks + (blocks == 1 ? " block)" : " blocks)") : ""), WHITE));
             if (markers.dimension() == mc.level.dimension()) {
                 nearest(lines, mc, markers.lava(), "Nearest lava", RED);
                 nearest(lines, mc, markers.blastResistant(), "Nearest blast resistant", PURPLE);
@@ -74,6 +83,33 @@ public final class HudOverlay {
         }
     }
 
+    private static void nearestMissingChunk(List<Line> lines, Minecraft mc, LongOpenHashSet missing) {
+        if (missing.isEmpty()) return;
+        Vec3 eye = mc.player.getEyePosition();
+        long best = 0;
+        double bestDist = Double.MAX_VALUE;
+        LongIterator it = missing.iterator();
+        while (it.hasNext()) {
+            long key = it.nextLong();
+            double dx = (ChunkPos.getX(key) << 4) + 8 - eye.x, dz = (ChunkPos.getZ(key) << 4) + 8 - eye.z;
+            double d = dx * dx + dz * dz;
+            if (d < bestDist) {
+                bestDist = d;
+                best = key;
+            }
+        }
+        double dx = (ChunkPos.getX(best) << 4) + 8 - eye.x, dz = (ChunkPos.getZ(best) << 4) + 8 - eye.z;
+        lines.add(new Line("Nearest unloaded chunk: " + Math.round(Math.sqrt(bestDist)) + " m " + arrow(mc, dx, dz)
+                + "  " + ((ChunkPos.getX(best) << 4) + 8) + " " + ((ChunkPos.getZ(best) << 4) + 8), YELLOW));
+    }
+
+    /** Arrow towards a horizontal offset, relative to where the player looks. */
+    private static String arrow(Minecraft mc, double dx, double dz) {
+        double targetYaw = Math.toDegrees(Math.atan2(-dx, dz));
+        double relative = Mth.wrapDegrees(targetYaw - mc.player.getYRot());
+        return ARROWS[Math.floorMod((int) Math.round(relative / 45.0), 8)];
+    }
+
     private static void nearest(List<Line> lines, Minecraft mc, List<BlockPos> positions, String label, int color) {
         if (positions.isEmpty()) return;
         Vec3 eye = mc.player.getEyePosition();
@@ -86,11 +122,7 @@ public final class HudOverlay {
                 best = p;
             }
         }
-        double dx = best.getX() + 0.5 - eye.x, dz = best.getZ() + 0.5 - eye.z;
-        // angle of the target relative to where the player looks, 0 = straight ahead
-        double targetYaw = Math.toDegrees(Math.atan2(-dx, dz));
-        double relative = Mth.wrapDegrees(targetYaw - mc.player.getYRot());
-        String arrow = ARROWS[Math.floorMod((int) Math.round(relative / 45.0), 8)];
+        String arrow = arrow(mc, best.getX() + 0.5 - eye.x, best.getZ() + 0.5 - eye.z);
         int dy = best.getY() - Mth.floor(eye.y);
         lines.add(new Line(label + ": " + Math.round(Math.sqrt(bestDist)) + " m " + arrow
                 + (dy > 2 ? " (" + dy + " up)" : dy < -2 ? " (" + -dy + " down)" : "")

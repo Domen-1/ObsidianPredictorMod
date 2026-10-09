@@ -2,6 +2,8 @@ package ru.domen.obsidianpredictor.server;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.fabricmc.loader.api.FabricLoader;
 import ru.domen.obsidianpredictor.ObsidianPredictorMod;
 
@@ -14,8 +16,10 @@ public final class ServerConfig {
     private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("obsidianpredictor-server.json");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    /** Largest area per job, in chunks. 6400 chunks = 1280x1280 blocks. */
-    public int maxChunksPerJob = 6400;
+    /** Optional fixed cap on the area per job, in chunks; 0 = limited only by memory. */
+    public int maxChunksPerJob = 0;
+    /** Share of the free heap (percent) one job may use for its copy of the area. */
+    public int memoryPercent = 50;
     /** Jobs that may exist at the same time. */
     public int maxJobs = 4;
     /** New chunk reads started per tick, per job. */
@@ -39,9 +43,14 @@ public final class ServerConfig {
         ServerConfig config = new ServerConfig();
         try {
             if (Files.exists(PATH)) {
-                ServerConfig loaded = GSON.fromJson(Files.readString(PATH), ServerConfig.class);
+                JsonObject raw = JsonParser.parseString(Files.readString(PATH)).getAsJsonObject();
+                ServerConfig loaded = GSON.fromJson(raw, ServerConfig.class);
                 if (loaded != null) {
                     config = loaded;
+                    // 0.1.0 wrote a fixed 6400-chunk cap as the default; areas are now limited by memory
+                    if (!raw.has("memoryPercent") && config.maxChunksPerJob == 6400) {
+                        config.maxChunksPerJob = 0;
+                    }
                 }
             }
             Files.createDirectories(PATH.getParent());
@@ -49,7 +58,8 @@ public final class ServerConfig {
         } catch (IOException | RuntimeException e) {
             ObsidianPredictorMod.LOGGER.error("Cannot load {}, using defaults", PATH, e);
         }
-        config.maxChunksPerJob = Math.max(1, config.maxChunksPerJob);
+        config.maxChunksPerJob = Math.max(0, config.maxChunksPerJob);
+        config.memoryPercent = Math.clamp(config.memoryPercent, 5, 90);
         config.maxJobs = Math.max(1, config.maxJobs);
         config.chunkReadsPerTick = Math.max(1, config.chunkReadsPerTick);
         config.maxPendingReads = Math.max(1, config.maxPendingReads);

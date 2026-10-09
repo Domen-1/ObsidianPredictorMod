@@ -44,10 +44,29 @@ class ParityTest {
             }
         });
         Predictor.Result result = predictor.run(done -> {}, () -> false);
+        checkBlastResistantBlocks(lit, flags, result);
         long ox = Math.min(X0, X0 + lit.width + 1);
         long oy = Math.min(Y0, Y0 + lit.height + 1);
         long oz = Math.min(Z0, Z0 + lit.length + 1);
         assertEquals(expected(expected), Predictor.waypoints(result, ox, oy, oz));
+    }
+
+    /** All blast-resistant blocks are listed once, and each waypoint is one of them. */
+    private static void checkBlastResistantBlocks(Litematic lit, byte[] flags, Predictor.Result result) {
+        java.util.Set<java.util.List<Integer>> expected = new java.util.HashSet<>();
+        for (int y = 0; y < lit.sizeY; y++)
+            for (int z = 0; z < lit.sizeZ; z++)
+                for (int x = 0; x < lit.sizeX; x++)
+                    if ((flags[lit.get(x, y, z)] & BlockClassifier.BLAST_RESISTANT) != 0) expected.add(List.of(x, y, z));
+        java.util.Set<java.util.List<Integer>> listed = new java.util.HashSet<>();
+        int[] all = result.blastResistantBlocks();
+        for (int i = 0; i < all.length; i += 3) listed.add(List.of(all[i], all[i + 1], all[i + 2]));
+        assertEquals(expected.size(), all.length / 3, "each block listed once");
+        assertEquals(expected, listed);
+        int[] markers = result.blastResistant();
+        for (int i = 0; i < markers.length; i += 3) {
+            org.junit.jupiter.api.Assertions.assertTrue(listed.contains(List.of(markers[i], markers[i + 1], markers[i + 2])));
+        }
     }
 
     /** Same data placed into world coordinates through a Snapshot, as the mod does. */

@@ -68,15 +68,23 @@ public class ObsidianClientGameTest implements FabricClientGameTest {
                     "every lava marker is on the lava pocket");
             check(fromServer.blastResistant().size() == 1 && inBox(fromServer.blastResistant().getFirst(), 20, -60, 20, 22, -58, 22),
                     "one marker for the obsidian group");
+            context.waitFor(mc -> ClientSession.markers().blastGroups().blockCount() == 27, 200);
+            check(context.computeOnClient(mc -> ClientSession.markers().blastGroups().groups.size()) == 1,
+                    "all 27 obsidian blocks arrive from the server as one group");
             context.waitTicks(5);
             context.takeScreenshot("obsidian-1-server");
 
             // 2. The same area computed on the client from its loaded chunks must give the same markers.
             context.runOnClient(mc -> ClientSession.startLocal());
             context.waitFor(mc -> ClientSession.local() != null && ClientSession.local().job().result() != null, 400);
+            context.waitFor(mc -> ClientSession.markers().blastGroups().blockCount() == 27, 200);
             ClientSession.Markers local = context.computeOnClient(mc -> ClientSession.markers());
-            check(local.lava().equals(fromServer.lava()) && local.blastResistant().equals(fromServer.blastResistant()),
-                    "local prediction equals the server one");
+            check(local.lava().equals(fromServer.lava()) && local.blastResistant().equals(fromServer.blastResistant())
+                    && local.blastGroups().all.equals(fromServer.blastGroups().all), "local prediction equals the server one");
+            server.runCommand("tp " + player + " 26 -55 27 facing 21 -59 21");
+            context.waitTicks(10);
+            context.takeScreenshot("obsidian-0-group-closeup");
+            server.runCommand("tp " + player + " 12 -45 36 facing 12 -61 12");
 
             // 3. Live: close the gap between water and lava with stone; markers must update without restarting.
             server.runCommand("fill 8 -60 8 16 -60 16 stone");
@@ -118,6 +126,30 @@ public class ObsidianClientGameTest implements FabricClientGameTest {
             context.setScreen(() -> null);
             context.waitTicks(5);
             context.takeScreenshot("obsidian-4-world");
+            context.runOnClient(mc -> ClientSession.stopAll(true));
+
+            // 6. Areas are limited by memory: a huge one is refused with a clear message.
+            chat.clear();
+            context.runOnClient(mc -> {
+                ClientSession.corner1 = new BlockPos(-200_000, -64, -200_000);
+                ClientSession.corner2 = new BlockPos(200_000, 319, 200_000);
+                ClientSession.startLocal();
+            });
+            context.waitFor(mc -> chat.stream().anyMatch(c -> c.getString().contains("too large for the free memory")), 100);
+            check(context.computeOnClient(mc -> ClientSession.local() == null), "a huge area is refused by the memory check");
+
+            // 7. An area larger than the render distance: missing chunks are walls, visible from far away.
+            context.runOnClient(mc -> {
+                ClientSession.corner1 = new BlockPos(-400, -64, -400);
+                ClientSession.corner2 = new BlockPos(400, -40, 400);
+                ClientSession.startLocal();
+            });
+            server.runCommand("tp " + player + " 0 60 0 facing 300 -40 120");
+            context.waitFor(mc -> ClientSession.local() != null && ClientSession.local().job().capturedChunks() > 0, 200);
+            context.waitTicks(40);
+            int missing = context.computeOnClient(mc -> ClientSession.local().job().missingChunks().size());
+            check(missing > 0, "chunks beyond render distance are reported missing (" + missing + ")");
+            context.takeScreenshot("obsidian-5-missing-chunks");
             context.runOnClient(mc -> ClientSession.stopAll(true));
         }
     }

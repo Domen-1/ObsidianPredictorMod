@@ -51,6 +51,7 @@ public final class ServerJob implements PredictionJob.Listener {
     private long lastSubscribedMs = System.currentTimeMillis();
     private long[] resultLava = new long[0];
     private long[] resultBlast = new long[0];
+    private long[] resultBlastBlocks = new long[0];
 
     ServerJob(long id, String name, UUID owner, String ownerName, ServerLevel level, BlockPos min, BlockPos max) {
         this.id = id;
@@ -176,10 +177,12 @@ public final class ServerJob implements PredictionJob.Listener {
         Predictor.Result result = job.result();
         resultLava = toWorld(result.lava());
         resultBlast = toWorld(result.blastResistant());
+        resultBlastBlocks = toWorld(result.blastResistantBlocks());
         ObsidianPredictorMod.LOGGER.info("Obsidian prediction '{}' #{}: {} lava, {} blast resistant markers",
                 name, job.revision(), result.lavaCount(), result.blastResistantCount());
         broadcast(new Payloads.JobStatus(info()));
         broadcast(resultPayload());
+        blocksPayloads().forEach(this::broadcast);
     }
 
     @Override
@@ -200,6 +203,18 @@ public final class ServerJob implements PredictionJob.Listener {
         return new Payloads.JobResult(id, job.revision(), resultLava, resultBlast);
     }
 
+    /** All blast-resistant blocks, in parts small enough for one packet each. */
+    public List<Payloads.JobBlocks> blocksPayloads() {
+        int per = Payloads.BLOCKS_PER_PACKET;
+        int parts = Math.max(1, (resultBlastBlocks.length + per - 1) / per);
+        List<Payloads.JobBlocks> payloads = new java.util.ArrayList<>(parts);
+        for (int part = 0; part < parts; part++) {
+            long[] slice = java.util.Arrays.copyOfRange(resultBlastBlocks, part * per, Math.min(resultBlastBlocks.length, (part + 1) * per));
+            payloads.add(new Payloads.JobBlocks(id, job.revision(), part, parts, slice));
+        }
+        return payloads;
+    }
+
     /** Waypoint lines, same format and order as the Python version. */
     public List<String> waypoints() {
         Predictor.Result result = job.result();
@@ -211,6 +226,7 @@ public final class ServerJob implements PredictionJob.Listener {
         ServerPlayNetworking.send(player, new Payloads.JobStatus(info()));
         if (job.result() != null) {
             ServerPlayNetworking.send(player, resultPayload());
+            blocksPayloads().forEach(p -> ServerPlayNetworking.send(player, p));
         }
     }
 

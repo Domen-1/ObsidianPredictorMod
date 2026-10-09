@@ -10,6 +10,7 @@ import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.level.block.state.BlockState;
 import ru.domen.obsidianpredictor.ObsidianPredictorMod;
 import ru.domen.obsidianpredictor.network.Payloads;
+import ru.domen.obsidianpredictor.world.MemoryBudget;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -84,14 +85,20 @@ public final class ServerJobManager {
             return "the area is outside the world height";
         }
         long chunks = (long) ((max.getX() >> 4) - (min.getX() >> 4) + 1) * ((max.getZ() >> 4) - (min.getZ() >> 4) + 1);
-        if (chunks > config.maxChunksPerJob) {
+        if (config.maxChunksPerJob > 0 && chunks > config.maxChunksPerJob) {
             return "area too large: " + chunks + " chunks, the server allows " + config.maxChunksPerJob;
+        }
+        long budget = MemoryBudget.available(config.memoryPercent / 100.0);
+        String memoryProblem = MemoryBudget.check(min, max, budget);
+        if (memoryProblem != null) {
+            return memoryProblem;
         }
         String jobName = name == null || name.isBlank() ? (player == null ? "console" : player.getName().getString()) + "'s area" : name.strip();
         if (jobName.length() > 48) jobName = jobName.substring(0, 48);
         UUID owner = player == null ? new UUID(0, 0) : player.getUUID();
         String ownerName = player == null ? "Server" : player.getName().getString();
         ServerJob job = new ServerJob(nextId++, jobName, owner, ownerName, level, min, max);
+        job.job.setMemoryBudget(budget);
         JOBS.put(job.id, job);
         hasJobs = true;
         if (player != null) {

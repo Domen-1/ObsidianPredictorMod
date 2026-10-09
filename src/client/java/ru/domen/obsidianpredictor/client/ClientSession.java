@@ -18,6 +18,7 @@ import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import ru.domen.obsidianpredictor.core.Predictor;
 import ru.domen.obsidianpredictor.network.Payloads;
+import ru.domen.obsidianpredictor.world.MemoryBudget;
 import ru.domen.obsidianpredictor.world.PredictionJob;
 
 import java.io.IOException;
@@ -25,18 +26,34 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Client state: the selected area and what is shown — either a prediction computed on this
  * client from loaded chunks, or a shared prediction followed from the server.
  */
 public final class ClientSession {
-    /** Same default limit as the server; keeps the snapshot in the low hundreds of MB at worst. */
-    public static final int MAX_LOCAL_CHUNKS = 6400;
+    /** Share of the free heap a local prediction may use. */
+    private static final double MEMORY_SHARE = 0.6;
     private static final int CAPTURES_PER_TICK = 64;
 
     /** Rendered markers, in waypoint order. */
-    public record Markers(ResourceKey<Level> dimension, BlockPos min, BlockPos max, List<BlockPos> lava, List<BlockPos> blastResistant) {}
+    /**
+     * {@code blastResistant} holds one waypoint per group (what Xaero export writes);
+     * {@code blastGroups} holds every blast-resistant block, for highlighting whole groups.
+     */
+    public record Markers(ResourceKey<Level> dimension, BlockPos min, BlockPos max, List<BlockPos> lava,
+                          List<BlockPos> blastResistant, BlockGroups blastGroups) {
+        Markers withGroups(BlockGroups groups) {
+            return new Markers(dimension, min, max, lava, blastResistant, groups);
+        }
+    }
+
+    /** Grouping runs off the client thread; only the newest request may publish its result. */
+    private static int groupingRequest;
+    /** Parts of the blast-resistant block list of the followed job's latest revision. */
+    private static long[][] pendingBlockParts;
+    private static int pendingBlocksRevision = -1;
 
     public static BlockPos corner1;
     public static BlockPos corner2;
@@ -123,13 +140,16 @@ public final class ClientSession {
             return;
         }
         long chunks = selectionChunks();
-        if (chunks > MAX_LOCAL_CHUNKS) {
-            message("Area too large: " + chunks + " chunks (max " + MAX_LOCAL_CHUNKS + ").");
+        long budget = MemoryBudget.available(MEMORY_SHARE);
+        String memoryProblem = MemoryBudget.check(sel[0], sel[1], budget);
+        if (memoryProblem != null) {
+            message(Component.literal(memoryProblem).withStyle(ChatFormatting.RED));
             return;
         }
         stopAll(false);
         local = new LocalPrediction(level, sel[0], sel[1]);
-        markers = new Markers(level.dimension(), sel[0], sel[1], List.of(), List.of());
+        local.job.setMemoryBudget(budget);
+        markers = new Markers(level.dimension(), sel[0], sel[1], List.of(), List.of(), BlockGroups.EMPTY);
         message("Started: " + chunks + " chunks. Fly around until every yellow chunk is loaded.");
     }
 
@@ -183,6 +203,8 @@ public final class ClientSession {
         followedJobId = -1;
         followedInfo = null;
         pendingServerStart = null;
+        pendingBlockParts = null;
+        pendingBlocksRevision = -1;
         if (clearMarkers) {
             markers = null;
         }
@@ -231,7 +253,7 @@ public final class ClientSession {
         ResourceKey<Level> dimension = mc().level == null ? null : mc().level.dimension();
         Markers current = markers;
         if (current == null || !current.min().equals(info.min()) || !current.max().equals(info.max())) {
-            markers = new Markers(dimension, info.min(), info.max(), List.of(), List.of());
+            markers = new Markers(dimension, info.min(), info.max(), List.of(), List.of(), BlockGroups.EMPTY);
         }
         PredictionJob.Phase phase = PredictionJob.Phase.byId(info.phase());
         if (phase == PredictionJob.Phase.FAILED && (previous == null || previous.phase() != info.phase())) {
@@ -244,7 +266,42 @@ public final class ClientSession {
         Payloads.JobInfo info = followedInfo;
         BlockPos min = info != null ? info.min() : markers != null ? markers.min() : BlockPos.ZERO;
         BlockPos max = info != null ? info.max() : markers != null ? markers.max() : BlockPos.ZERO;
-        markers = new Markers(mc().level.dimension(), min, max, toPositions(result.lava()), toPositions(result.blastResistant()));
+        // keep the previous groups until this revision's blocks arrive, so they don't blink
+        BlockGroups groups = markers != null ? markers.blastGroups() : BlockGroups.EMPTY;
+        markers = new Markers(mc().level.dimension(), min, max, toPositions(result.lava()), toPositions(result.blastResistant()), groups);
+    }
+
+    static void onJobBlocks(Payloads.JobBlocks blocks) {
+        if (blocks.jobId() != followedJobId || blocks.parts() <= 0 || blocks.part() >= blocks.parts()) return;
+        if (blocks.revision() != pendingBlocksRevision || pendingBlockParts == null || pendingBlockParts.length != blocks.parts()) {
+            pendingBlocksRevision = blocks.revision();
+            pendingBlockParts = new long[blocks.parts()][];
+        }
+        pendingBlockParts[blocks.part()] = blocks.positions();
+        for (long[] part : pendingBlockParts) {
+            if (part == null) return;
+        }
+        int total = 0;
+        for (long[] part : pendingBlockParts) total += part.length;
+        long[] all = new long[total];
+        int offset = 0;
+        for (long[] part : pendingBlockParts) {
+            System.arraycopy(part, 0, all, offset, part.length);
+            offset += part.length;
+        }
+        pendingBlockParts = null;
+        groupInBackground(all);
+    }
+
+    /** Groups blocks off-thread and attaches them to the current markers when done. */
+    static void groupInBackground(long[] positions) {
+        int request = ++groupingRequest;
+        CompletableFuture.supplyAsync(() -> BlockGroups.of(positions))
+                .thenAcceptAsync(groups -> {
+                    if (request == groupingRequest && markers != null) {
+                        markers = markers.withGroups(groups);
+                    }
+                }, mc());
     }
 
     static void onJobClosed(Payloads.JobClosed closed) {
@@ -358,7 +415,13 @@ public final class ClientSession {
             List<BlockPos> blast = new ArrayList<>(result.blastResistantCount());
             int[] b = result.blastResistant();
             for (int i = 0; i < b.length; i += 3) blast.add(job.min.offset(b[i], b[i + 1], b[i + 2]));
-            markers = new Markers(level.dimension(), job.min, job.max, lava, blast);
+            markers = new Markers(level.dimension(), job.min, job.max, lava, blast, markers != null ? markers.blastGroups() : BlockGroups.EMPTY);
+            int[] all = result.blastResistantBlocks();
+            long[] positions = new long[all.length / 3];
+            for (int i = 0; i < positions.length; i++) {
+                positions[i] = BlockPos.asLong(job.min.getX() + all[3 * i], job.min.getY() + all[3 * i + 1], job.min.getZ() + all[3 * i + 2]);
+            }
+            groupInBackground(positions);
             if (job.revision() == 1) {
                 message("Done: " + lava.size() + " lava markers, " + blast.size() + " blast-resistant groups. They update as blocks change.");
             }

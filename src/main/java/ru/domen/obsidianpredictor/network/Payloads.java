@@ -13,7 +13,9 @@ import java.util.List;
 
 /** Client/server protocol for shared (server-side) predictions. */
 public final class Payloads {
-    public static final int PROTOCOL_VERSION = 1;
+    public static final int PROTOCOL_VERSION = 2;
+    /** Positions per {@link JobBlocks} packet; keeps each packet well under the 1 MB payload limit. */
+    public static final int BLOCKS_PER_PACKET = 65536;
 
     private Payloads() {}
 
@@ -166,6 +168,25 @@ public final class Payloads {
         }
     }
 
+    /** Every blast-resistant block of a result, split into parts; a revision is complete once all parts arrived. */
+    public record JobBlocks(long jobId, int revision, int part, int parts, long[] positions) implements CustomPacketPayload {
+        public static final Type<JobBlocks> TYPE = payloadType("job_blocks");
+        public static final StreamCodec<RegistryFriendlyByteBuf, JobBlocks> CODEC = StreamCodec.of(
+                (buf, p) -> {
+                    buf.writeLong(p.jobId);
+                    buf.writeVarInt(p.revision);
+                    buf.writeVarInt(p.part);
+                    buf.writeVarInt(p.parts);
+                    buf.writeLongArray(p.positions);
+                },
+                buf -> new JobBlocks(buf.readLong(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readLongArray()));
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     public record JobClosed(long jobId, String reason) implements CustomPacketPayload {
         public static final Type<JobClosed> TYPE = payloadType("job_closed");
         public static final StreamCodec<RegistryFriendlyByteBuf, JobClosed> CODEC = StreamCodec.of(
@@ -193,6 +214,7 @@ public final class Payloads {
         PayloadTypeRegistry.clientboundPlay().register(JobList.TYPE, JobList.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(JobStatus.TYPE, JobStatus.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(JobResult.TYPE, JobResult.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(JobBlocks.TYPE, JobBlocks.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(JobClosed.TYPE, JobClosed.CODEC);
     }
 }

@@ -13,6 +13,7 @@ import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderPipelines;
@@ -42,12 +43,15 @@ public final class MarkerRenderer {
     private static final Color BLAST_RESISTANT = new Color(0.55f, 0.1f, 0.85f, 0.55f);
     private static final Color AREA = new Color(1f, 1f, 1f, 0.6f);
     private static final Color SELECTION = new Color(0.4f, 0.9f, 1f, 0.6f);
-    private static final Color MISSING_CHUNK = new Color(1f, 0.85f, 0.1f, 0.18f);
+    private static final Color MISSING_CHUNK = new Color(1f, 0.85f, 0.1f, 0.16f);
+    /** The lid over missing chunks covers a lot of the view from above, so it is fainter than the walls. */
+    private static final Color MISSING_CHUNK_LID = new Color(1f, 0.85f, 0.1f, 0.06f);
 
     /** Closer than this a marker is drawn as a block, farther as a camera-facing square. */
     private static final double BOX_DISTANCE = 48;
-    private static final double MAX_DISTANCE = 1536;
-    private static final double MISSING_CHUNK_DISTANCE = 384;
+    /** Closer than this a blast-resistant group is drawn block by block. */
+    private static final double GROUP_MESH_DISTANCE = 96;
+    private static final double MAX_DISTANCE = 4096;
 
     private static final RenderPipeline PIPELINE = RenderPipelines.register(RenderPipeline.builder(RenderPipelines.DEBUG_FILLED_SNIPPET)
             .withLocation(Identifier.fromNamespaceAndPath(ObsidianPredictorMod.MOD_ID, "pipeline/markers"))
@@ -86,9 +90,9 @@ public final class MarkerRenderer {
                 if (!showSelection) {
                     outline(markers.min(), markers.max(), AREA);
                 }
-                missingChunks();
+                missingChunks(markers.min(), markers.max());
                 markers(markers.lava(), LAVA);
-                markers(markers.blastResistant(), BLAST_RESISTANT);
+                blastResistant(markers);
             }
             context.poseStack().popPose();
             draw(mc);
@@ -98,18 +102,69 @@ public final class MarkerRenderer {
         }
     }
 
-    private static void missingChunks() {
+    /**
+     * Chunks a local prediction still needs, as walls around them over the area's height plus a lid,
+     * so they show from any distance (they are always beyond render distance).
+     */
+    private static void missingChunks(BlockPos min, BlockPos max) {
         ClientSession.LocalPrediction local = ClientSession.local();
         if (local == null || local.job().phase() != PredictionJob.Phase.CAPTURING) return;
-        double y = camera.y - 1.5;
-        LongIterator it = local.job().missingChunks().iterator();
+        LongOpenHashSet missing = local.job().missingChunks();
+        double y1 = min.getY(), y2 = max.getY() + 1;
+        LongIterator it = missing.iterator();
         while (it.hasNext()) {
             long key = it.nextLong();
-            int x = ChunkPos.getX(key) << 4, z = ChunkPos.getZ(key) << 4;
-            double dx = x + 8 - camera.x, dz = z + 8 - camera.z;
-            if (dx * dx + dz * dz > MISSING_CHUNK_DISTANCE * MISSING_CHUNK_DISTANCE) continue;
-            plane(x + 0.5, z + 0.5, x + 15.5, z + 15.5, y, MISSING_CHUNK);
+            int cx = ChunkPos.getX(key), cz = ChunkPos.getZ(key);
+            double x1 = Math.max(cx << 4, min.getX()), x2 = Math.min((cx << 4) + 16, max.getX() + 1);
+            double z1 = Math.max(cz << 4, min.getZ()), z2 = Math.min((cz << 4) + 16, max.getZ() + 1);
+            quad(x1, y2, z2, x2, y2, z2, x2, y2, z1, x1, y2, z1, MISSING_CHUNK_LID);
+            if (!missing.contains(ChunkPos.pack(cx, cz - 1))) quad(x1, y1, z1, x2, y1, z1, x2, y2, z1, x1, y2, z1, MISSING_CHUNK);
+            if (!missing.contains(ChunkPos.pack(cx, cz + 1))) quad(x1, y1, z2, x2, y1, z2, x2, y2, z2, x1, y2, z2, MISSING_CHUNK);
+            if (!missing.contains(ChunkPos.pack(cx - 1, cz))) quad(x1, y1, z1, x1, y1, z2, x1, y2, z2, x1, y2, z1, MISSING_CHUNK);
+            if (!missing.contains(ChunkPos.pack(cx + 1, cz))) quad(x2, y1, z1, x2, y1, z2, x2, y2, z2, x2, y2, z1, MISSING_CHUNK);
         }
+    }
+
+    /** A quad visible from both sides. */
+    private static void quad(double ax, double ay, double az, double bx, double by, double bz,
+                             double cx, double cy, double cz, double dx, double dy, double dz, Color c) {
+        vertex(ax, ay, az, c); vertex(bx, by, bz, c); vertex(cx, cy, cz, c); vertex(dx, dy, dz, c);
+        vertex(dx, dy, dz, c); vertex(cx, cy, cz, c); vertex(bx, by, bz, c); vertex(ax, ay, az, c);
+    }
+
+    /** Whole groups up close (outer faces only), one square per group farther away. */
+    private static void blastResistant(ClientSession.Markers markers) {
+        BlockGroups groups = markers.blastGroups();
+        if (groups.groups.isEmpty()) {
+            // blocks not received yet: show the one-per-group waypoints
+            markers(markers.blastResistant(), BLAST_RESISTANT);
+            return;
+        }
+        for (BlockGroups.Group group : groups.groups) {
+            double dx = Math.max(0, Math.max(group.minX() - camera.x, camera.x - (group.maxX() + 1)));
+            double dz = Math.max(0, Math.max(group.minZ() - camera.z, camera.z - (group.maxZ() + 1)));
+            double dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist > MAX_DISTANCE) continue;
+            if (dist < GROUP_MESH_DISTANCE) {
+                for (long p : group.blocks()) {
+                    outerFaces(p, groups.all, BLAST_RESISTANT);
+                }
+            } else {
+                billboard(group.centerX(), group.centerY(), group.centerZ(), (float) Math.max(1.5, dist / 40), BLAST_RESISTANT);
+            }
+        }
+    }
+
+    /** Faces of a block that do not touch another block of the set. */
+    private static void outerFaces(long p, LongOpenHashSet all, Color c) {
+        int x = BlockPos.getX(p), y = BlockPos.getY(p), z = BlockPos.getZ(p);
+        double x1 = x, y1 = y, z1 = z, x2 = x + 1, y2 = y + 1, z2 = z + 1;
+        if (!all.contains(BlockPos.asLong(x, y + 1, z))) { vertex(x1, y2, z2, c); vertex(x2, y2, z2, c); vertex(x2, y2, z1, c); vertex(x1, y2, z1, c); }
+        if (!all.contains(BlockPos.asLong(x, y - 1, z))) { vertex(x1, y1, z1, c); vertex(x2, y1, z1, c); vertex(x2, y1, z2, c); vertex(x1, y1, z2, c); }
+        if (!all.contains(BlockPos.asLong(x, y, z - 1))) { vertex(x2, y1, z1, c); vertex(x1, y1, z1, c); vertex(x1, y2, z1, c); vertex(x2, y2, z1, c); }
+        if (!all.contains(BlockPos.asLong(x, y, z + 1))) { vertex(x1, y1, z2, c); vertex(x2, y1, z2, c); vertex(x2, y2, z2, c); vertex(x1, y2, z2, c); }
+        if (!all.contains(BlockPos.asLong(x - 1, y, z))) { vertex(x1, y1, z1, c); vertex(x1, y1, z2, c); vertex(x1, y2, z2, c); vertex(x1, y2, z1, c); }
+        if (!all.contains(BlockPos.asLong(x + 1, y, z))) { vertex(x2, y1, z2, c); vertex(x2, y1, z1, c); vertex(x2, y2, z1, c); vertex(x2, y2, z2, c); }
     }
 
     private static void markers(List<BlockPos> positions, Color color) {
@@ -158,10 +213,6 @@ public final class MarkerRenderer {
         vertex(x1, y1, z1, c); vertex(x1, y1, z2, c); vertex(x1, y2, z2, c); vertex(x1, y2, z1, c);
         // east
         vertex(x2, y1, z2, c); vertex(x2, y1, z1, c); vertex(x2, y2, z1, c); vertex(x2, y2, z2, c);
-    }
-
-    private static void plane(double x1, double z1, double x2, double z2, double y, Color c) {
-        vertex(x1, y, z2, c); vertex(x2, y, z2, c); vertex(x2, y, z1, c); vertex(x1, y, z1, c);
     }
 
     private static void billboard(double x, double y, double z, float size, Color c) {

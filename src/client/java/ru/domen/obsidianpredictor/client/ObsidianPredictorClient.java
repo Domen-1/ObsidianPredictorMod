@@ -59,6 +59,7 @@ public class ObsidianPredictorClient implements ClientModInitializer {
         });
         ClientPlayNetworking.registerGlobalReceiver(Payloads.JobStatus.TYPE, (payload, context) -> ClientSession.onJobStatus(payload.info()));
         ClientPlayNetworking.registerGlobalReceiver(Payloads.JobResult.TYPE, (payload, context) -> ClientSession.onJobResult(payload));
+        ClientPlayNetworking.registerGlobalReceiver(Payloads.JobBlocks.TYPE, (payload, context) -> ClientSession.onJobBlocks(payload));
         ClientPlayNetworking.registerGlobalReceiver(Payloads.JobClosed.TYPE, (payload, context) -> ClientSession.onJobClosed(payload));
         ClientPlayNetworking.registerGlobalReceiver(Payloads.JobList.TYPE, (payload, context) -> ClientSession.onJobList(payload.jobs()));
 
