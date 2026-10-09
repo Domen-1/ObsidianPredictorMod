@@ -1,0 +1,16 @@
+[package]
+name = "obsidian-predictor"
+version = "1.4.0"
+edition = "2024"
+description = "Predicts possible obsidian formations in a world eater perimeter (Rust port of obi_predict.py from EQUENOS-2/Obsidian-Predictor)"
+license = "MIT"
+repository = "https://github.com/Domen-1/ObsidianPredictorMod"
+
+[dependencies]
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+serde_json = "1"
+rfd = "0.15"
+
+[profile.release]
+lto = true
+codegen-units = 1

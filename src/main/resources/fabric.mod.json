@@ -1,0 +1,40 @@
+{
+	"schemaVersion": 1,
+	"id": "obsidianpredictor",
+	"version": "${version}",
+	"name": "Obsidian Predictor",
+	"description": "Predicts where obsidian will form when a world eater floods lava, and shows blast-resistant blocks in the area.",
+	"authors": [
+		"__domen__"
+	],
+	"contributors": [
+		"EQUENOS (prediction algorithm, Obsidian-Predictor)",
+		"Obabok (rendering code from AreaScanner)"
+	],
+	"contact": {
+		"homepage": "https://github.com/Domen-1/ObsidianPredictorMod",
+		"sources": "https://github.com/Domen-1/ObsidianPredictorMod",
+		"issues": "https://github.com/Domen-1/ObsidianPredictorMod/issues"
+	},
+	"license": "LGPL-3.0-only",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"ru.domen.obsidianpredictor.ObsidianPredictorMod"
+		],
+		"client": [
+			"ru.domen.obsidianpredictor.client.ObsidianPredictorClient"
+		]
+	},
+	"mixins": [
+		{
+			"config": "obsidianpredictor.mixins.json"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

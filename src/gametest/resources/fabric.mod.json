@@ -1,0 +1,15 @@
+{
+	"schemaVersion": 1,
+	"id": "obsidianpredictor-test",
+	"version": "1.0.0",
+	"name": "Obsidian Predictor client tests",
+	"environment": "client",
+	"entrypoints": {
+		"fabric-client-gametest": [
+			"ru.domen.obsidianpredictor.test.ObsidianClientGameTest"
+		]
+	},
+	"depends": {
+		"obsidianpredictor": "*"
+	}
+}

@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "ru.domen.obsidianpredictor.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ChunkMapInvoker",
+    "LevelChunkMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

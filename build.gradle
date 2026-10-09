@@ -1,0 +1,84 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+repositories {
+	maven {
+		url = 'https://maven.xpple.dev/maven2'
+	}
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"obsidianpredictor" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+// ./gradlew runClientGameTest: opens a client window, runs a dedicated server with the mod and checks shared and
+// local predictions end to end. Screenshots: build/run/clientGameTest/screenshots. Needs a display.
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "obsidianpredictor-test"
+		enableGameTests = false
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	include implementation("dev.xpple:clientarguments:${project.clientarguments_version}")
+
+	testImplementation "org.junit.jupiter:junit-jupiter:${project.junit_version}"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+test {
+	useJUnitPlatform()
+	// parity fixtures shared with the Rust/Python versions
+	systemProperty "obsidianpredictor.testData", file("src/test/resources/predictor").absolutePath
+	maxHeapSize = "2G"
+	testLogging {
+		events "passed", "failed"
+		exceptionFormat "full"
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+	def projectName = project.name
+	inputs.property "projectName", projectName
+	archiveAppendix = project.minecraft_version
+	from("LICENSE") {
+		rename { "${it}_$projectName" }
+	}
+}
